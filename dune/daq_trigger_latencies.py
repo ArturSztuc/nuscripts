@@ -306,7 +306,7 @@ def PlotTPSets(_tpsets, _output):
     print(f"Maximum: {maximum}")
 
     # Create and fill the latencies histogram(s?)
-    histogram_drrec_drhand = ROOT.TH1D("", "Latency: DataRequest Received to DataRequest handled;#Delta t (s);Number of TPs;", 100, float(minimum), float(maximum))
+    histogram_drrec_drhand = ROOT.TH1D("", "Latency: TPSet Received to TPSet buffered;#Delta t (s);Number of TPs;", 100, float(minimum), float(maximum))
     for lat in _tpsets:
         histogram_drrec_drhand .Fill(lat.m_latency_tp_received_to_buffered)
 
