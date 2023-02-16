@@ -2,41 +2,41 @@ import os
 from dataclasses import dataclass
 import ROOT
 
-@dataclass
 class TPSetData:
     """
     Class for the received TP data
     """
-    m_time_start: int
-    m_adc_integral: int
-    m_real_time: int
+    def __init__(self, _time_start, _adc_integral, _time_intrigger, _time_inbuffer):
+        self.m_time_start       = int(_time_start)
+        self.m_adc_integral     = int(_adc_integral)
+        self.m_time_intrigger   = int(_time_intrigger)
+        self.m_time_inbuffer    = int(_time_inbuffer)
+        self.m_latency_tp_received_to_buffered = (_time_inbuffer - _time_intrigger)/1e9
 
-    def __str__(self):
-        return f"{self.m_time_start}-{self.m_adc_integral}-{self.m_real_time}"
-
-@dataclass
 class TPDataRequest:
     """
     Class for the TP request from the TPBuffer
     """
-    m_window_begin: int 
-    m_window_end: int
-    m_real_time: int
-
-    def __str__(self):
-        return f"{self.m_window_begin}-{self.m_window_end}-{self.m_real_time}"
+    def __init__(self, _window_begin, _window_end, _time_received, _time_handled):
+        self.m_window_begin = int(_window_begin)
+        self.m_window_end   = int(_window_end)
+        self.m_time_received= int(_time_received)
+        self.m_time_handled = int(_time_handled)
+        self.m_latency_dr_received_to_handled = (_time_handled - _time_received)/1e9
 
 @dataclass
 class TPLatency:
     """
     Class for the TP latency data
     """
-    m_tp_received: int
-    m_tp_requested: int
-    m_tp_latency: int
+    #m_tpsets: int
+    #m_tpdatarequests: int
+    m_latency_tptrigger_to_drhandled: int
+    m_latency_tptrigger_to_drreceived: int
+    m_latency_tpbuffered_to_drreceived: int
 
     def __str__(self):
-        return f"{self.m_tp_received}-{self.m_tp_requested}-{self.m_tp_latency}"
+        return f"{self.m_tp_received}-{self.m_tp_requested}"
 
 
 def GetTPLatencies(_tp_received, _tp_requests):
@@ -56,9 +56,14 @@ def GetTPLatencies(_tp_received, _tp_requests):
         for tp in _tp_received:
             # Save latency if within the window
             if (tp.m_time_start >= request.m_window_begin) and (tp.m_time_start <= request.m_window_end):
-                latency = (request.m_real_time - tp.m_real_time)/1e9 # latencies were measured in nanoseconds
+                latency_tptrigger_to_drhandled = (request.m_time_handled - tp.m_time_intrigger)/1e9
+                latency_tptrigger_to_drreceived = (request.m_time_received - tp.m_time_intrigger)/1e9
+                latency_tpbuffered_to_drreceived = (request.m_time_received - tp.m_time_inbuffer)/1e9
                 #print(f"Latency: {latency}")
-                latencies.append(TPLatency(tp.m_real_time, request.m_real_time, latency))
+                latencies.append(TPLatency(#tp.m_real_time, request.m_real_time,
+                                           latency_tptrigger_to_drhandled,
+                                           latency_tptrigger_to_drreceived,
+                                           latency_tpbuffered_to_drreceived))
             # If above the window, look at the next request. TPs are sorted...
             elif tp.m_time_start > request.m_window_end:
                 break
@@ -103,15 +108,16 @@ def GetTPDataRequests(_file):
 
     data_requests = []
     for line in input_data:
-        if("TPs being requested:" not in line):
+        if("TPs Requested:" not in line):
             continue
-        location = line.find("TPs being requested: ")
+        location = line.find("TPs Requested: ")
         line = (line[location:])
 
         window_begin = GetNumberFromLine(line, "window_begin:")
         window_end   = GetNumberFromLine(line, "window_end:")
-        real_time    = GetNumberFromLine(line, "real_time:")
-        data_requests.append(TPDataRequest(window_begin, window_end, real_time))
+        time_received = GetNumberFromLine(line, "real_time_req:")
+        time_handled  = GetNumberFromLine(line, "real_time_han:")
+        data_requests.append(TPDataRequest(window_begin, window_end, time_received, time_handled))
 
     print(f"Number of DataRequests requests: {len(data_requests)}")
     return data_requests
@@ -138,11 +144,12 @@ def GetTPSets(_file):
         location = line.find("TPs Received.")
         line = (line[location:])
 
-        time_start  = GetNumberFromLine(line, "time_start:")
-        adc_integral= GetNumberFromLine(line, "ADC integral:")
-        real_time   = GetNumberFromLine(line, "real_time:")
+        time_start      = GetNumberFromLine(line, "time_start:")
+        adc_integral    = GetNumberFromLine(line, "ADC integral:")
+        time_intrigger  = GetNumberFromLine(line, "real_time_in:")
+        time_inbuffer   = GetNumberFromLine(line, "real_time_buff:")
 
-        tp_sets.append(TPSetData(time_start, adc_integral, real_time))
+        tp_sets.append(TPSetData(time_start, adc_integral, time_intrigger, time_inbuffer))
 
     print(f"Number of received TPSets: {len(tp_sets)}")
     return tp_sets 
@@ -207,7 +214,14 @@ def SetStyle():
    
     ROOT.gROOT.SetStyle("Default");
 
-def Plot(_latencies, _output):
+def DrawAndSave(histogram, name):
+    # Save the histograms
+    canvas = ROOT.TCanvas("canvas")
+    canvas.cd()
+    histogram.Draw()
+    canvas.SaveAs(name)
+
+def PlotLatencies(_latencies, _output):
     """
     Takes the vector of latencies, output name/folder, and generates/saves the
     latency plots.
@@ -216,29 +230,87 @@ def Plot(_latencies, _output):
         latencies: vector of TPLatency objects
         output: optional output folder/file name
     """
+    # Sets the general stylistics (based on NOvA)
+    SetStyle()
+    ROOT.gROOT.SetBatch(True)
 
+    # Sort the latencies and find min/max
+    print("Finding min and max of each TP 1")
+    _latencies.sort(key=lambda x: x.m_latency_tptrigger_to_drhandled)
+    minimum_l1 = _latencies[0].m_latency_tptrigger_to_drhandled
+    maximum_l1 = _latencies[-1].m_latency_tptrigger_to_drhandled
+
+    print("Finding min and max of each TP 2")
+    _latencies.sort(key=lambda x: x.m_latency_tptrigger_to_drreceived)
+    minimum_l2 = _latencies[0].m_latency_tptrigger_to_drreceived
+    maximum_l2 = _latencies[-1].m_latency_tptrigger_to_drreceived
+
+    print("Finding min and max of each TP 3")
+    _latencies.sort(key=lambda x: x.m_latency_tpbuffered_to_drreceived)
+    minimum_l3 = _latencies[0].m_latency_tpbuffered_to_drreceived
+    maximum_l3 = _latencies[-1].m_latency_tpbuffered_to_drreceived
+
+
+    # Create and fill the latencies histogram(s?)
+    print("Filling histograms")
+    histogram_tprec_drhand = ROOT.TH1D("", "Latency: TPSet Received to DataRequest handled;#Delta t (s);Number of TPs;", 100, float(minimum_l1), float(maximum_l1))
+    histogram_tprec_drrec  = ROOT.TH1D("", "Latency: TPSet Received to DataRequest requested;#Delta t (s);Number of TPs;", 100, float(minimum_l2), float(maximum_l2))
+    histogram_tpbuf_drrec  = ROOT.TH1D("", "Latency: TPSet Buffered to DataRequest requested;#Delta t (s);Number of TPs;", 100, float(minimum_l3), float(maximum_l3))
+    for lat in _latencies:
+        histogram_tprec_drhand .Fill(lat.m_latency_tptrigger_to_drhandled)
+        histogram_tprec_drrec  .Fill(lat.m_latency_tptrigger_to_drreceived)
+        histogram_tpbuf_drrec  .Fill(lat.m_latency_tpbuffered_to_drreceived)
+
+    DrawAndSave(histogram_tprec_drhand, _output + "latency_TPTrigger_to_DRHandled.png")
+    DrawAndSave(histogram_tprec_drrec, _output + "latency_TPTrigger_to_DRReceived.png")
+    DrawAndSave(histogram_tpbuf_drrec, _output + "latency_TPBuffered_to_DRReceived.png")
+
+def PlotDataRequests(_data_requests, _output):
+    """
+    TODO: PlotDataRequests and PlotTPSets are duplicate... don't do that.
+    """
     # Sets the general stylistics (based on NOvA)
     SetStyle()
     ROOT.gROOT.SetBatch(True)
 
     # Sort the latencies and find min/max
     print("Sorting received TPs!")
-    _latencies.sort(key=lambda x: x.m_tp_latency)
-    minimum = _latencies[0].m_tp_latency
-    maximum = _latencies[-1].m_tp_latency
+    _data_requests.sort(key=lambda x: x.m_latency_dr_received_to_handled)
+    minimum = _data_requests[0].m_latency_dr_received_to_handled
+    maximum = _data_requests[-1].m_latency_dr_received_to_handled
+
     print(f"Minimum: {minimum}")
     print(f"Maximum: {maximum}")
 
     # Create and fill the latencies histogram(s?)
-    histogram = ROOT.TH1D("", ";#Delta t (s);Number of TPs;", 100, float(minimum), float(maximum))
-    for lat in _latencies:
-        histogram.Fill(lat.m_tp_latency)
-    
-    # Save the histograms
-    canvas = ROOT.TCanvas("canvas")
-    canvas.cd()
-    histogram.Draw()
-    canvas.SaveAs(_output + "output.png")
+    histogram_drrec_drhand = ROOT.TH1D("", "Latency: DataRequest Received to DataRequest handled;#Delta t (s);Number of TPs;", 100, float(minimum), float(maximum))
+    for lat in _data_requests:
+        histogram_drrec_drhand .Fill(lat.m_latency_dr_received_to_handled)
+
+    DrawAndSave(histogram_drrec_drhand, _output + "latency_DRReceived_to_DRHandled.png")
+
+def PlotTPSets(_tpsets, _output):
+    """
+    TODO: PlotDataRequests and PlotTPSets are duplicate... don't do that.
+    """
+    # Sets the general stylistics (based on NOvA)
+    SetStyle()
+    ROOT.gROOT.SetBatch(True)
+
+    # Sort the latencies and find min/max
+    print("Sorting received TPs!")
+    _tpsets.sort(key=lambda x: x.m_latency_tp_received_to_buffered)
+    minimum = _tpsets[0].m_latency_tp_received_to_buffered
+    maximum = _tpsets[-1].m_latency_tp_received_to_buffered
+    print(f"Minimum: {minimum}")
+    print(f"Maximum: {maximum}")
+
+    # Create and fill the latencies histogram(s?)
+    histogram_drrec_drhand = ROOT.TH1D("", "Latency: DataRequest Received to DataRequest handled;#Delta t (s);Number of TPs;", 100, float(minimum), float(maximum))
+    for lat in _tpsets:
+        histogram_drrec_drhand .Fill(lat.m_latency_tp_received_to_buffered)
+
+    DrawAndSave(histogram_drrec_drhand, _output + "latency_TPReceived_to_TPBuffered.png")
 
 def main(_file, _output):
     print("Extracting the TP requests")
@@ -246,9 +318,6 @@ def main(_file, _output):
 
     print("Extracting the received TPs")
     tp_received = GetTPSets(_file)
-
-    print(f"Last TP received: {tp_received[-1].m_real_time}")
-    print(f"Last TP request : {tp_requests[-1].m_real_time}")
 
     print("Sorting TP requests!")
     tp_requests.sort(key=lambda x: x.m_window_begin)
@@ -260,7 +329,11 @@ def main(_file, _output):
     latencies = GetTPLatencies(tp_received, tp_requests)
     
     print("Plot latencies!")
-    Plot(latencies, _output)
+    PlotLatencies(latencies, _output)
+    print("Plot DataRequests")
+    PlotDataRequests(tp_requests, _output)
+    print("Plot TPSets")
+    PlotTPSets(tp_received, _output)
 
 if __name__ == "__main__":
     import argparse
