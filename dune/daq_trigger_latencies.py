@@ -221,53 +221,16 @@ def DrawAndSave(histogram, name):
     histogram.Draw()
     canvas.SaveAs(name)
 
-def PlotLatencies(_latencies, _output):
+def Plot(_vector_objects, _data_handle_name, _output_name, _histogram_title):
     """
-    Takes the vector of latencies, output name/folder, and generates/saves the
-    latency plots.
+    Plots a vector of objects' data member into a histogram and saves it into an
+    output .png file.
 
-    parameters:
-        latencies: vector of TPLatency objects
-        output: optional output folder/file name
-    """
-    # Sets the general stylistics (based on NOvA)
-    SetStyle()
-    ROOT.gROOT.SetBatch(True)
-
-    # Sort the latencies and find min/max
-    print("Finding min and max of each TP 1")
-    _latencies.sort(key=lambda x: x.m_latency_tptrigger_to_drhandled)
-    minimum_l1 = _latencies[0].m_latency_tptrigger_to_drhandled
-    maximum_l1 = _latencies[-1].m_latency_tptrigger_to_drhandled
-
-    print("Finding min and max of each TP 2")
-    _latencies.sort(key=lambda x: x.m_latency_tptrigger_to_drreceived)
-    minimum_l2 = _latencies[0].m_latency_tptrigger_to_drreceived
-    maximum_l2 = _latencies[-1].m_latency_tptrigger_to_drreceived
-
-    print("Finding min and max of each TP 3")
-    _latencies.sort(key=lambda x: x.m_latency_tpbuffered_to_drreceived)
-    minimum_l3 = _latencies[0].m_latency_tpbuffered_to_drreceived
-    maximum_l3 = _latencies[-1].m_latency_tpbuffered_to_drreceived
-
-
-    # Create and fill the latencies histogram(s?)
-    print("Filling histograms")
-    histogram_tprec_drhand = ROOT.TH1D("", "Latency: TPSet Received to DataRequest handled;#Delta t (s);Number of TPs;", 100, float(minimum_l1), float(maximum_l1))
-    histogram_tprec_drrec  = ROOT.TH1D("", "Latency: TPSet Received to DataRequest requested;#Delta t (s);Number of TPs;", 100, float(minimum_l2), float(maximum_l2))
-    histogram_tpbuf_drrec  = ROOT.TH1D("", "Latency: TPSet Buffered to DataRequest requested;#Delta t (s);Number of TPs;", 100, float(minimum_l3), float(maximum_l3))
-    for lat in _latencies:
-        histogram_tprec_drhand .Fill(lat.m_latency_tptrigger_to_drhandled)
-        histogram_tprec_drrec  .Fill(lat.m_latency_tptrigger_to_drreceived)
-        histogram_tpbuf_drrec  .Fill(lat.m_latency_tpbuffered_to_drreceived)
-
-    DrawAndSave(histogram_tprec_drhand, _output + "latency_TPTrigger_to_DRHandled.png")
-    DrawAndSave(histogram_tprec_drrec, _output + "latency_TPTrigger_to_DRReceived.png")
-    DrawAndSave(histogram_tpbuf_drrec, _output + "latency_TPBuffered_to_DRReceived.png")
-
-def PlotDataRequests(_data_requests, _output):
-    """
-    TODO: PlotDataRequests and PlotTPSets are duplicate... don't do that.
+    prameters:
+        _vector_objects: vector of objects for plotting
+        _data_handle_name: the exact name of the object's class data member to plot
+        _output_name: the full output name
+        _histogram_title: histogram title with the axis titles, in ROOT format
     """
     # Sets the general stylistics (based on NOvA)
     SetStyle()
@@ -275,19 +238,20 @@ def PlotDataRequests(_data_requests, _output):
 
     # Sort the latencies and find min/max
     print("Sorting received TPs!")
-    _data_requests.sort(key=lambda x: x.m_latency_dr_received_to_handled)
-    minimum = _data_requests[0].m_latency_dr_received_to_handled
-    maximum = _data_requests[-1].m_latency_dr_received_to_handled
+    _vector_objects.sort(key=lambda x: vars(x)[_data_handle_name])
+    minimum = vars(_vector_objects[0])[_data_handle_name]
+    maximum = vars(_vector_objects[-1])[_data_handle_name]
 
     print(f"Minimum: {minimum}")
     print(f"Maximum: {maximum}")
 
-    # Create and fill the latencies histogram(s?)
-    histogram_drrec_drhand = ROOT.TH1D("", "Latency: DataRequest Received to DataRequest handled;#Delta t (s);Number of TPs;", 100, float(minimum), float(maximum))
-    for lat in _data_requests:
-        histogram_drrec_drhand .Fill(lat.m_latency_dr_received_to_handled)
+    # Create and fill the latencies histogram
+    histogram= ROOT.TH1D("", _histogram_title, 100, float(minimum), float(maximum))
+    for obj in _vector_objects:
+        histogram.Fill(vars(obj)[_data_handle_name])
 
-    DrawAndSave(histogram_drrec_drhand, _output + "latency_DRReceived_to_DRHandled.png")
+    DrawAndSave(histogram, _output_name)
+
 
 def PlotTPSets(_tpsets, _output):
     """
@@ -312,12 +276,28 @@ def PlotTPSets(_tpsets, _output):
 
     DrawAndSave(histogram_drrec_drhand, _output + "latency_TPReceived_to_TPBuffered.png")
 
+def FunkifyDataRequests(tp_requests):
+    for data_request in tp_requests:
+        print(f"* m_latency: {vars(data_request)['m_latency_dr_received_to_handled']}")
+
 def main(_file, _output):
-    print("Extracting the TP requests")
+    print("Extracting the DataRequest objects")
     tp_requests = GetTPDataRequests(_file)
+
+    print("Plotting the DataRequest latency")
+    Plot(tp_requests, 
+         "m_latency_dr_received_to_handled",
+         _output + "latency_DRReceived_to_DRHandled.png",
+         "Latency: DataRequest Received to DataRequest handled;#Delta t(s);Number of TPs")
 
     print("Extracting the received TPs")
     tp_received = GetTPSets(_file)
+
+    print("Plotting the TP objects")
+    Plot(tp_received, 
+         "m_latency_tp_received_to_buffered",
+         _output + "latency_TPReceived_to_TPBuffered.png",
+         "Latency: TPSet Received to TPSet buffered;#Delta t(s);Number of TPs")
 
     print("Sorting TP requests!")
     tp_requests.sort(key=lambda x: x.m_window_begin)
@@ -327,14 +307,19 @@ def main(_file, _output):
 
     print("Filling the TP latencies!")
     latencies = GetTPLatencies(tp_received, tp_requests)
+    Plot(latencies, 
+         "m_latency_tptrigger_to_drhandled",
+         _output + "latency_TPReceived_to_DRHandled.png",
+         "Latency: TPSet Received to DataRequest Handled;#Delta t(s);Number of TPs")
+    Plot(latencies, 
+         "m_latency_tptrigger_to_drreceived",
+         _output + "latency_TPReceived_to_DRReceived.png",
+         "Latency: TPSet Received to DataRequest Received;#Delta t(s);Number of TPs")
+    Plot(latencies, 
+         "m_latency_tpbuffered_to_drreceived",
+         _output + "latency_TPBuffered_to_DRReceived.png",
+         "Latency: TPSet Buffered to DataRequest Received;#Delta t(s);Number of TPs")
     
-    print("Plot latencies!")
-    PlotLatencies(latencies, _output)
-    print("Plot DataRequests")
-    PlotDataRequests(tp_requests, _output)
-    print("Plot TPSets")
-    PlotTPSets(tp_received, _output)
-
 if __name__ == "__main__":
     import argparse
 
