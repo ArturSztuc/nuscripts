@@ -1,6 +1,9 @@
 import os
+from tqdm import tqdm
 from dataclasses import dataclass
 import ROOT
+
+# TODO: Change these @dataclasses to numpy matrices?
 
 class TPSetData:
     """
@@ -29,15 +32,42 @@ class TPLatency:
     """
     Class for the TP latency data
     """
-    #m_tpsets: int
-    #m_tpdatarequests: int
     m_latency_tptrigger_to_drhandled: int
     m_latency_tptrigger_to_drreceived: int
     m_latency_tpbuffered_to_drreceived: int
 
     def __str__(self):
-        return f"{self.m_tp_received}-{self.m_tp_requested}"
+        return f"{self.m_latency_tptrigger_to_drhandled}-{self.m_latency_tptrigger_to_drreceived}"
 
+@dataclass
+class MLTDRLatency:
+    """
+    This is dumb, but that's how I have to do it for now because of how the plotting script is written...
+    TODO: Change all of this to numpy arrays
+    """
+    m_latency_td_to_dr: int
+
+@dataclass
+class TPMLTLatency:
+    """
+    Data class holding the TP->TR latencies
+    """
+    m_latency_tptrigger_to_tdsent: int
+    m_latency_tpbuffered_to_tdsent: int
+
+@dataclass
+class MLTTriggerDecision:
+    """
+    Class for the MLT latency data
+    """
+    #m_tpsets: int
+    #m_tpdatarequests: int
+    m_readout_start: int
+    m_readout_end: int
+    m_latency_mlt_td_to_dfo: int
+
+    def __str__(self):
+        return f"{self.m_readout_start}-{self.m_readout_start}"
 
 def GetTPLatencies(_tp_received, _tp_requests):
     """
@@ -51,8 +81,7 @@ def GetTPLatencies(_tp_received, _tp_requests):
     """
 
     latencies = []
-    iterator = 0
-    for request in _tp_requests:
+    for request in tqdm(_tp_requests):
         for tp in _tp_received:
             # Save latency if within the window
             if (tp.m_time_start >= request.m_window_begin) and (tp.m_time_start <= request.m_window_end):
@@ -67,6 +96,45 @@ def GetTPLatencies(_tp_received, _tp_requests):
             # If above the window, look at the next request. TPs are sorted...
             elif tp.m_time_start > request.m_window_end:
                 break
+    return latencies
+
+def GetTP_to_MLT(_trigger_decisions, _tp_requests):
+    """
+    Matches the received TPs with the Trigger Decisions sent from the
+    ModuleLevelTrigger, calculates the latency and stores/returns that in a
+    vector of Latency objects.
+
+    parameters:
+        _trigger_decisions: Vector of MLTTriggerDecision objects
+        _tp_requests: Vector of TPDataRequest objects
+    """
+    latencies = []
+    for td in tqdm(_trigger_decisions):
+        for tp in _tp_requests:
+            if (tp.m_time_start >= td.m_readout_start) and (tp.m_time_start <= td.m_readout_end):
+                latency_intrigger_to_tdsent = (td.m_latency_mlt_td_to_dfo - tp.m_time_intrigger )/1e9
+                latency_inbuffer_to_tdsent  = (td.m_latency_mlt_td_to_dfo - tp.m_time_inbuffer  )/1e9
+                latencies.append(TPMLTLatency(latency_intrigger_to_tdsent, latency_inbuffer_to_tdsent))
+            elif tp.m_time_start > td.m_readout_end:
+                break
+    return latencies
+
+def GetMLT_to_DRReceivedLatencies(_trigger_decisions, _data_requests):
+    """
+    Matches the TriggerDecisions from the ModuleLevelTrigger with the
+    DataRequests received by the TPBufer, calculates the latencies and
+    stores/returns that in a vector of Latency objects.
+
+    parameters:
+        _trigger_decisions: Vector of MLTTriggerDecision objects
+        _tp_requests: Vector of DataRequest objects
+    """
+    latencies = []
+    for td in tqdm(_trigger_decisions):
+        for dr in _data_requests:
+            if (td.m_readout_start == dr.m_window_begin) and (td.m_readout_end == dr.m_window_end):
+                latency = (dr.m_time_received - td.m_latency_mlt_td_to_dfo)/1e9
+                latencies.append(MLTDRLatency(latency))
     return latencies
 
 def GetNumberFromLine(_line, _text):
@@ -91,68 +159,35 @@ def GetNumberFromLine(_line, _text):
     #print("POSTSPLIT: ", ret)
     return int(ret)
 
-def GetTPDataRequests(_file):
-    """
-    Retreives the TP request data from a file, saves and returns that data in
-    an array of TPDataRequest objects.
-
-    parameters:
-        _file: Log file with all the trigger output
-
-    return:
-        A vector of the filled TPDataRequest objects
-    """
+def GetObjectVector(_file, _prefix, _token_list, _ObjectType):
+    # Open the file
     input_file = open(_file)
     input_data = input_file.readlines()
     input_file.close()
 
-    data_requests = []
-    for line in input_data:
-        if("TPs Requested:" not in line):
-            continue
-        location = line.find("TPs Requested: ")
-        line = (line[location:])
-
-        window_begin = GetNumberFromLine(line, "window_begin:")
-        window_end   = GetNumberFromLine(line, "window_end:")
-        time_received = GetNumberFromLine(line, "real_time_req:")
-        time_handled  = GetNumberFromLine(line, "real_time_han:")
-        data_requests.append(TPDataRequest(window_begin, window_end, time_received, time_handled))
-
-    print(f"Number of DataRequests requests: {len(data_requests)}")
-    return data_requests
-
-def GetTPSets(_file):
-    """
-    Retreives the TPs that were received by the Trigger app from a file, saves
-    and returns that data in an array of TPSetData objects.
-
-    parameters:
-        _file: Log file with all the trigger output
+    # Debugging...
+    print(f'Getting the following objects:\n  _file: {_file}\n  _prefix: {_prefix}\n  _token_list: {_token_list}\n  _ObjectType: {_ObjectType}')
     
-    return:
-        A vector of the filled TPSetData objects with TPSets' timestamps
-    """
-    input_file = open(_file)
-    input_data = input_file.readlines()
-    input_file.close()
-
-    tp_sets = []
+    objects = []
     for line in input_data:
-        if("TPs Received." not in line):
+        # Only continue if the prefix is right
+        if(_prefix not in line):
             continue
-        location = line.find("TPs Received.")
+
+        # Extract the line
+        location = line.find(_prefix)
         line = (line[location:])
 
-        time_start      = GetNumberFromLine(line, "time_start:")
-        adc_integral    = GetNumberFromLine(line, "ADC integral:")
-        time_intrigger  = GetNumberFromLine(line, "real_time_in:")
-        time_inbuffer   = GetNumberFromLine(line, "real_time_buff:")
+        # Fill data for each token
+        data = []
+        for token in _token_list:
+            data.append(GetNumberFromLine(line, token))
 
-        tp_sets.append(TPSetData(time_start, adc_integral, time_intrigger, time_inbuffer))
+        # Create the new object and append to our array
+        objects.append(_ObjectType(*data))
 
-    print(f"Number of received TPSets: {len(tp_sets)}")
-    return tp_sets 
+    # Return array of objects
+    return objects
 
 def SetStyle():
     """
@@ -253,8 +288,14 @@ def Plot(_vector_objects, _data_handle_name, _output_name, _histogram_title):
     DrawAndSave(histogram, _output_name)
 
 def main(_file, _output):
+    # Extracting Data Requests
     print("Extracting the DataRequest objects")
-    tp_requests = GetTPDataRequests(_file)
+
+    tp_requests = GetObjectVector(_file, 'TPs Requested:',
+                                  ['window_begin:', 'window_end:', 'real_time_req:', 'real_time_han:'],
+                                  TPDataRequest)
+
+    #tp_requests = GetTPDataRequests(_file)
 
     print("Plotting the DataRequest latency")
     Plot(tp_requests, 
@@ -262,8 +303,25 @@ def main(_file, _output):
          _output + "latency_DRReceived_to_DRHandled.png",
          "Latency: DataRequest Received to DataRequest handled;#Delta t(s);Number of TPs")
 
+    # Extracting ModuleLevelTrigger TriggerDecisions
+    print("Extracting the MLTTriggerDecision objects")
+
+    td_sent = GetObjectVector(_file, 'MLT TD Sent:',
+                              ['readout_start:', 'readout_end:', 'time_td_sent:'],
+                              MLTTriggerDecision)
+
+
+    #td_sent = GetMLTTriggerDecisions(_file)
+    print("Sorting MLTTriggerDecision objects")
+    td_sent.sort(key=lambda x: x.m_readout_start)
+
+    # Extracting the received and buffered TPSets
     print("Extracting the received TPs")
-    tp_received = GetTPSets(_file)
+    tp_received = GetObjectVector(_file, 'TPs Received.',
+                                  ['time_start:', 'ADC integral:', 'real_time_in:', 'real_time_buff:'],
+                                  TPSetData)
+
+    #tp_received = GetTPSets(_file)
 
     print("Plotting the TP objects")
     Plot(tp_received, 
@@ -276,6 +334,28 @@ def main(_file, _output):
 
     print("Sorting received TPs!")
     tp_received.sort(key=lambda x: x.m_time_start)
+
+    # Extrating the TriggerDecisions from the ModuleLevelTrigger
+    print("Filling the MLT Trigger decisions to DataRequestes received latencies!")
+    mlt_to_drreceived_latencies = GetMLT_to_DRReceivedLatencies(td_sent, tp_requests)
+    Plot(mlt_to_drreceived_latencies, 
+         "m_latency_td_to_dr",
+         _output + "latency_TriggerDecision_to_DRReceived.png",
+         "Latency: MLT Trigger Decision Sent to DataRequest Received;#Delta t(s);Number of DataRequests")
+
+    print("Filling the TPReceived & buffered to MLT trigger decision sent!")
+    tp_to_mlt_latencues = GetTP_to_MLT(td_sent, tp_received)
+
+    # Plotting the rest of the latencies
+    Plot(tp_to_mlt_latencues, 
+         "m_latency_tptrigger_to_tdsent",
+         _output + "latency_TPReceived_to_TDSent.png",
+         "Latency: TPSet Received to MLT Trigger Decision Sent;#Delta t(s);Number of TPs")
+
+    Plot(tp_to_mlt_latencues, 
+         "m_latency_tpbuffered_to_tdsent",
+         _output + "latency_TPBuffered_to_TDSent.png",
+         "Latency: TPSet Buffered to MLT Trigger Decision Sent;#Delta t(s);Number of TPs")
 
     print("Filling the TP latencies!")
     latencies = GetTPLatencies(tp_received, tp_requests)
