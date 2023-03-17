@@ -100,6 +100,7 @@ def plot_constructed_dataset(out, run):
     fig.legend(prop=legend_properties, loc="upper right")
     file_name = "run_" + str(run) + "_tp_event_display.png"
     plt.savefig(file_name, format="png")
+    print("Managed to get about ", round(start_time_seconds[-1] - start_time_seconds[0], 1), " seconds of TP stream.")
 
 
 if __name__ == '__main__':
